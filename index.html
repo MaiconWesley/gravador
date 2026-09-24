@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gravador de Empacotamento - TUDIMA</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f9;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        h2 { color: #333; margin-bottom: 10px; }
+        .controls {
+            background: #fff;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            display: flex;
+            gap: 15px;
+            align-items: flex-start;
+            margin-bottom: 15px;
+            flex-wrap: wrap;
+            max-width: 850px;
+            width: 100%;
+        }
+        .controls label { font-weight: bold; font-size: 13px; display: block; margin-bottom: 4px; }
+        .controls select, .controls textarea {
+            padding: 6px;
+            font-size: 13px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-family: Arial, sans-serif;
+        }
+        .controls textarea {
+            resize: vertical;
+            height: 55px;
+            width: 200px;
+        }
+        .control-group {
+            display: flex;
+            flex-direction: column;
+        }
+        .buttons-group {
+            display: flex;
+            gap: 10px;
+            align-self: center;
+        }
+        button {
+            padding: 10px 15px;
+            font-size: 14px;
+            font-weight: bold;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            color: #fff;
+            height: 42px;
+        }
+        #btnGravar { background-color: #e74c3c; }
+        #btnGravar:disabled { background-color: #95a5a6; cursor: not-allowed; }
+        #btnParar { background-color: #27ae60; }
+        #btnParar:disabled { background-color: #95a5a6; cursor: not-allowed; }
+        
+        .video-container {
+            position: relative;
+            max-width: 850px;
+            width: 100%;
+            background: #000;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        #videoSource { display: none; }
+        
+        canvas {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+        #status {
+            margin-top: 10px;
+            font-weight: bold;
+            color: #2c3e50;
+        }
+    </style>
+</head>
+<body>
+
+    <h2>Gravador de Empacotamento</h2>
+
+    <div class="controls">
+        <div class="control-group">
+            <label for="cameraSelect">Câmera:</label>
+            <select id="cameraSelect" style="width: 140px;"></select>
+        </div>
+        
+        <div class="control-group">
+            <label for="posicaoSelect">Posição da Descrição:</label>
+            <select id="posicaoSelect" style="width: 150px;">
+                <option value="sup_esq">Esquerdo Superior</option>
+                <option value="sup_dir">Direito Superior</option>
+                <option value="inf_esq">Esquerdo Inferior</option>
+                <option value="inf_dir">Direito Inferior</option>
+            </select>
+        </div>
+
+        <div class="control-group">
+            <label for="descricaoInput">Descrição:</label>
+            <textarea id="descricaoInput">Data Envio: 
+N° Nota Fiscal: 
+N° Pedido: 
+Lacre:</textarea>
+        </div>
+
+        <div class="buttons-group">
+            <button id="btnGravar" onclick="iniciarGravacao()">🔴 Iniciar Gravação</button>
+            <button id="btnParar" onclick="pararGravacao()" disabled>⏹ Parar e Baixar</button>
+        </div>
+    </div>
+
+    <div class="video-container">
+        <video id="videoSource" autoplay playsinline></video>
+        <canvas id="outputCanvas"></canvas>
+    </div>
+    
+    <div id="status">Status: Pronto para conectar</div>
+
+    <script>
+        const videoSource = document.getElementById('videoSource');
+        const canvas = document.getElementById('outputCanvas');
+        const ctx = canvas.getContext('2d');
+        const cameraSelect = document.getElementById('cameraSelect');
+        const posicaoSelect = document.getElementById('posicaoSelect');
+        const descricaoInput = document.getElementById('descricaoInput');
+        const btnGravar = document.getElementById('btnGravar');
+        const btnParar = document.getElementById('btnParar');
+        const statusDiv = document.getElementById('status');
+
+        let mediaStream = null;
+        let mediaRecorder = null;
+        let recordedChunks = [];
+        let animationFrameId = null;
+        
+        // Variáveis do Cronômetro
+        let tempoSegundos = 0;
+        let intervaloCronometro = null;
+        let estaGravando = false;
+
+        async function carregarCameras() {
+            try {
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const videoDevices = devices.filter(device => device.kind === 'videoinput');
+                cameraSelect.innerHTML = '';
+                videoDevices.forEach((device, index) => {
+                    const option = document.createElement('option');
+                    option.value = device.deviceId;
+                    option.text = device.label || `Câmera ${index + 1}`;
+                    cameraSelect.appendChild(option);
+                });
+                if (videoDevices.length > 0) {
+                    iniciarStreamCamera();
+                }
+            } catch (err) {
+                console.error("Erro ao listar câmeras:", err);
+                statusDiv.innerText = "Erro ao acessar as câmeras. Verifique as permissões.";
+            }
+        }
+
+        async function iniciarStreamCamera() {
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(track => track.stop());
+            }
+
+            const deviceId = cameraSelect.value;
+            const constraints = {
+                video: { deviceId: deviceId ? { exact: deviceId } : undefined, width: 1280, height: 720 },
+                audio: false
+            };
+
+            try {
+                mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+                videoSource.srcObject = mediaStream;
+                await videoSource.play();
+
+                canvas.width = videoSource.videoWidth || 1280;
+                canvas.height = videoSource.videoHeight || 720;
+
+                statusDiv.innerText = "Status: Câmera conectada";
+                desenharLoop();
+            } catch (err) {
+                console.error("Erro ao abrir câmera:", err);
+                statusDiv.innerText = "Erro ao abrir a câmera selecionada.";
+            }
+        }
+
+        cameraSelect.addEventListener('change', iniciarStreamCamera);
+
+        function desenharLoop() {
+            if (videoSource.readyState === videoSource.HAVE_ENOUGH_DATA) {
+                // Limpa o canvas e desenha a câmera
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.drawImage(videoSource, 0, 0, canvas.width, canvas.height);
+
+                const textoCompleto = descricaoInput.value;
+                const posicao = posicaoSelect.value;
+                const margin = 30;
+
+                // Formata o cronômetro (MM:SS)
+                const minutos = Math.floor(tempoSegundos / 60).toString().padStart(2, '0');
+                const segundos = (tempoSegundos % 60).toString().padStart(2, '0');
+                const textoCronometro = `⏱ ${minutos}:${segundos}`;
+
+                // Se estiver gravando, desenha o cronômetro acima da descrição
+                if (estaGravando) {
+                    ctx.font = "bold 30px Arial";
+                    const cronoWidth = ctx.measureText(textoCronometro).width;
+                    const cronoHeight = 45;
+                    const boxCronoWidth = cronoWidth + 30;
+
+                    let cx = margin;
+                    let cy = margin;
+
+                    if (posicao === 'sup_dir') {
+                        cx = canvas.width - boxCronoWidth - margin;
+                        cy = margin;
+                    } else if (posicao === 'inf_esq') {
+                        cx = margin;
+                        // Posiciona acima do bloco inferior
+                        const linhasCount = textoCompleto ? textoCompleto.split('\n').length : 0;
+                        const descHeight = (linhasCount * 38) + 20;
+                        cy = canvas.height - descHeight - cronoHeight - margin - 10;
+                    } else if (posicao === 'inf_dir') {
+                        cx = canvas.width - boxCronoWidth - margin;
+                        const linhasCount = textoCompleto ? textoCompleto.split('\n').length : 0;
+                        const descHeight = (linhasCount * 38) + 20;
+                        cy = canvas.height - descHeight - cronoHeight - margin - 10;
+                    } else { // 'sup_esq' padrão
+                        cx = margin;
+                        cy = margin;
+                    }
+
+                    // Fundo do cronômetro (Vermelho destaque)
+                    ctx.fillStyle = "rgba(231, 76, 60, 0.85)";
+                    ctx.fillRect(cx, cy, boxCronoWidth, cronoHeight);
+
+                    // Texto do cronômetro
+                    ctx.fillStyle = "#FFFFFF";
+                    ctx.fillText(textoCronometro, cx + 15, cy + 32);
+
+                    // Ajusta o Y da descrição para ficar logo abaixo do cronômetro
+                    if (posicao === 'sup_esq' || posicao === 'sup_dir') {
+                        // Se for no topo, desloca a descrição para baixo do cronômetro
+                        // Vamos renderizar a descrição logo em seguida ajustando a posição Y base
+                    }
+                }
+
+                // Desenha a Descrição
+                if (textoCompleto) {
+                    const linhas = textoCompleto.split('\n');
+                    ctx.font = "bold 28px Arial";
+                    
+                    let maxWidth = 0;
+                    linhas.forEach(linha => {
+                        const w = ctx.measureText(linha).width;
+                        if (w > maxWidth) maxWidth = w;
+                    });
+
+                    const lineHeight = 38;
+                    const padding = 20;
+                    const boxHeight = (linhas.length * lineHeight) + padding;
+                    const boxWidth = maxWidth + 30;
+
+                    let x = margin;
+                    let y = margin;
+
+                    if (posicao === 'sup_dir') {
+                        x = canvas.width - boxWidth - margin;
+                        y = estaGravando ? margin + 55 : margin; // Empurra para baixo se tiver cronômetro
+                    } else if (posicao === 'inf_esq') {
+                        x = margin;
+                        y = canvas.height - boxHeight - margin;
+                    } else if (posicao === 'inf_dir') {
+                        x = canvas.width - boxWidth - margin;
+                        y = canvas.height - boxHeight - margin;
+                    } else { // 'sup_esq' padrão
+                        x = margin;
+                        y = estaGravando ? margin + 55 : margin;
+                    }
+
+                    // Desenha o fundo translúcido da descrição
+                    ctx.fillStyle = "rgba(0, 0, 0, 0.65)";
+                    ctx.fillRect(x, y, boxWidth, boxHeight);
+
+                    // Desenha cada linha de texto
+                    ctx.fillStyle = "#FFFFFF";
+                    linhas.forEach((linha, index) => {
+                        const linhaY = y + 32 + (index * lineHeight);
+                        ctx.fillText(linha, x + 15, linhaY);
+                    });
+                }
+            }
+            animationFrameId = requestAnimationFrame(desenharLoop);
+        }
+
+        function iniciarCronometro() {
+            tempoSegundos = 0;
+            intervaloCronometro = setInterval(() => {
+                tempoSegundos++;
+            }, 1000);
+        }
+
+        function pararCronometro() {
+            clearInterval(intervaloCronometro);
+            tempoSegundos = 0;
+        }
+
+        function iniciarGravacao() {
+            recordedChunks = [];
+            estaGravando = true;
+            iniciarCronometro();
+
+            const canvasStream = canvas.captureStream(30); 
+            
+            try {
+                mediaRecorder = new MediaRecorder(canvasStream, { mimeType: 'video/webm; codecs=vp9' });
+            } catch (e) {
+                mediaRecorder = new MediaRecorder(canvasStream);
+            }
+
+            mediaRecorder.ondataavailable = function(event) {
+                if (event.data.size > 0) {
+                    recordedChunks.push(event.data);
+                }
+            };
+
+            mediaRecorder.onstop = function() {
+                const blob = new Blob(recordedChunks, { type: 'video/webm' });
+                const url = URL.createObjectURL(blob);
+                
+                const a = document.createElement('a');
+                a.style.display = 'none';
+                a.href = url;
+                const dataHora = new Date().toISOString().replace(/[:.]/g, '-');
+                a.download = `empacotamento_${dataHora}.webm`;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                statusDiv.innerText = "Status: Vídeo salvo e baixado com sucesso!";
+            };
+
+            mediaRecorder.start();
+            
+            btnGravar.disabled = true;
+            btnParar.disabled = false;
+            cameraSelect.disabled = true;
+            posicaoSelect.disabled = true;
+            descricaoInput.disabled = true;
+            statusDiv.innerText = "Status: Gravando empacotamento...";
+        }
+
+        function pararGravacao() {
+            mediaRecorder.stop();
+            estaGravando = false;
+            pararCronometro();
+            
+            btnGravar.disabled = false;
+            btnParar.disabled = true;
+            cameraSelect.disabled = false;
+            posicaoSelect.disabled = false;
+            descricaoInput.disabled = false;
+        }
+
+        window.onload = () => {
+            if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+                carregarCameras();
+            } else {
+                statusDiv.innerText = "Navegador não suporta captura de vídeo.";
+            }
+        };
+    </script>
+</body>
+</html>
