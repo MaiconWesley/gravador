@@ -709,6 +709,7 @@
 
                 mediaStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
                 mainVideo.srcObject = mediaStream;
+                mainVideo.play().catch(e => console.warn('Play automático do mainVideo bloqueado:', e));
                 videoPlaceholder.style.display = 'none';
                 btnCamPermission.style.display = 'none';
 
@@ -721,6 +722,7 @@
                 sidebarVideo.style.width = '100%';
                 sidebarVideo.style.height = '100%';
                 sidebarVideo.style.objectFit = 'cover';
+                sidebarVideo.play().catch(e => console.warn('Play sidebar bloqueado:', e));
                 sidebarCameraContainer.innerHTML = '';
                 sidebarCameraContainer.appendChild(sidebarVideo);
 
@@ -1046,10 +1048,10 @@
             }
         };
 
-        // Tentar ativar automaticamente no load e exibir botão caso o navegador bloqueie
+        // Removido initCamera automático para evitar bloqueio do Chrome
+        // A câmera só é ativada quando o usuário clicar em "Ativar Câmera"
         window.addEventListener('DOMContentLoaded', () => {
             renderItemsList();
-            initCamera();
         });
     </script>
 </body>
