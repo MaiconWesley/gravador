@@ -79,7 +79,7 @@
         .camera-preview video {
             width: 100%;
             height: 100%;
-            object-fit: cover;
+            object-fit: contain;
         }
 
         .btn-cam-permission {
@@ -226,7 +226,7 @@
         #mainVideo {
             width: 100%;
             height: 100%;
-            object-fit: cover;
+            object-fit: contain;
             background: #000;
         }
 
@@ -560,10 +560,8 @@
         <div class="sidebar">
             <div class="section-header">CONTROLES / CÂMERA</div>
             <div class="camera-box">
-                <div class="camera-preview" id="sidebarCameraContainer">
-                    <span>Câmera Indisponível</span>
-                </div>
-                <button class="btn-cam-permission" id="btnCamPermission" onclick="initCamera()">Ativar Câmera</button>
+                <div class="camera-preview" id="sidebarCameraContainer" style="display:none;"></div>
+                <button class="btn-cam-permission" id="btnCamPermission" style="display:none;">Ativar Câmera</button>
             </div>
             <div class="section-header">LISTA DE EMPACOTAMENTOS</div>
             <div class="items-list-container" id="itemsList">
@@ -591,7 +589,8 @@
                 </div>
 
                 <div class="video-placeholder" id="videoPlaceholder">VÍDEO</div>
-                <video id="mainVideo" playsinline muted></video>
+                <video id="mainVideo" playsinline muted style="display:none;"></video>
+                <canvas id="recordCanvas" style="width:100%; height:100%; object-fit:cover; border-radius:8px;"></canvas>
             </div>
         </div>
 
@@ -653,6 +652,24 @@
     </div>
 
     <script>
+        // Persistência local (localStorage)
+        const STORAGE_KEY = 'gravador_dados';
+        function salvarDados() {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify({ items, activeItemId }));
+        }
+        function carregarDados() {
+            try {
+                const raw = localStorage.getItem(STORAGE_KEY);
+                if (raw) {
+                    const parsed = JSON.parse(raw);
+                    if (parsed.items) items = parsed.items;
+                    if (parsed.activeItemId !== undefined && parsed.activeItemId !== null) activeItemId = parsed.activeItemId;
+                }
+            } catch (e) {
+                console.warn('Erro ao carregar dados locais:', e);
+            }
+        }
+
         // Estado da Aplicação
         let items = [];
         let activeItemId = null;
@@ -697,6 +714,8 @@
         const recordingIndicator = document.getElementById('recordingIndicator');
         const sidebarCameraContainer = document.getElementById('sidebarCameraContainer');
         const btnCamPermission = document.getElementById('btnCamPermission');
+        const recordCanvas = document.getElementById('recordCanvas');
+        const ctx = recordCanvas.getContext('2d');
         const toastContainer = document.getElementById('toast-container');
 
         // Inicializar Câmera Web com tratamento robusto
@@ -707,7 +726,7 @@
                     return;
                 }
 
-                mediaStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                mediaStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
                 mainVideo.srcObject = mediaStream;
                 
                 // Espera o navegador receber os dados do vídeo
@@ -715,20 +734,14 @@
                     await new Promise(resolve => setTimeout(resolve, 100));
                 }
                 
-                mainVideo.play().catch(e => console.warn('Play automático bloqueado:', e));
+                await mainVideo.play();
                 videoPlaceholder.style.display = 'none';
                 btnCamPermission.style.display = 'none';
-
-                // Clonar stream para o preview da sidebar
-                const sidebarVideo = document.createElement('video');
-                sidebarVideo.srcObject = mediaStream;
-                // Espera o navegador receber os dados do vídeo
-                while (sidebarVideo.videoWidth === 0) {
-                    await new Promise(resolve => setTimeout(resolve, 100));
-                }
-                sidebarVideo.play().catch(e => console.warn('Play sidebar bloqueado:', e));
-                sidebarCameraContainer.innerHTML = '';
-                sidebarCameraContainer.appendChild(sidebarVideo);
+                
+                // Inicia loop de desenho no canvas (para gravar timer + descrição)
+                if (animationFrameId) cancelAnimationFrame(animationFrameId);
+                animationFrameId = null;
+                desenharLoop();
 
                 showToast('Câmera ativada com sucesso!');
             } catch (err) {
@@ -754,6 +767,63 @@
             const seconds = totalSeconds % 60;
             return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
         }
+
+        // Função de desenho contínuo do canvas (como no arquivo funcional)
+        function desenharLoop() {
+            if (mainVideo.readyState >= 2) {
+                recordCanvas.width = mainVideo.videoWidth || 1280;
+                recordCanvas.height = mainVideo.videoHeight || 720;
+                ctx.drawImage(mainVideo, 0, 0, recordCanvas.width, recordCanvas.height);
+
+                const currentItem = items.find(i => i.id === activeItemId);
+
+                if (isRecording) {
+                    // Desenhar cronômetro no topo esquerdo
+                    ctx.font = 'bold 24px Arial';
+                    ctx.fillStyle = 'rgba(231, 76, 60, 0.85)';
+                    const cronoText = '⏱ ' + formatTime(secondsElapsed);
+                    const cronoW = ctx.measureText(cronoText).width + 20;
+                    ctx.fillRect(10, 10, cronoW, 36);
+                    ctx.fillStyle = '#FFFFFF';
+                    ctx.fillText(cronoText, 20, 34);
+
+                    // Desenhar descrição (dados do item) no topo direito se houver item
+                    if (currentItem) {
+                        const desc = `Data: ${currentItem.dataEnvio}\nNFE: ${currentItem.nfe}\nPedido: ${currentItem.pedido}` + (currentItem.lacre ? `\nLacre: ${currentItem.lacre}` : '') + (currentItem.origem ? `\nOrigem: ${currentItem.origem}` : '');
+                        ctx.font = 'bold 14px Arial';
+                        const lines = desc.split('\n');
+                        const maxW = Math.max(...lines.map(l => ctx.measureText(l).width)) + 20;
+                        const boxH = lines.length * 20 + 10;
+                        const x = recordCanvas.width - maxW - 10;
+                        const y = 10;
+                        ctx.fillStyle = 'rgba(0,0,0,0.65)';
+                        ctx.fillRect(x, y, maxW, boxH);
+                        ctx.fillStyle = '#FFFFFF';
+                        lines.forEach((line, i) => {
+                            ctx.fillText(line, x + 10, y + 20 + i * 20);
+                        });
+                    }
+                } else if (currentItem && videoTopRightContainer.style.display === 'flex') {
+                    // Também desenhar quando não está gravando, para manter visual
+                    const desc = `Data: ${currentItem.dataEnvio}\nNFE: ${currentItem.nfe}\nPedido: ${currentItem.pedido}` + (currentItem.lacre ? `\nLacre: ${currentItem.lacre}` : '') + (currentItem.origem ? `\nOrigem: ${currentItem.origem}` : '');
+                    ctx.font = 'bold 14px Arial';
+                    const lines = desc.split('\n');
+                    const maxW = Math.max(...lines.map(l => ctx.measureText(l).width)) + 20;
+                    const boxH = lines.length * 20 + 10;
+                    const x = recordCanvas.width - maxW - 10;
+                    const y = 10;
+                    ctx.fillStyle = 'rgba(0,0,0,0.65)';
+                    ctx.fillRect(x, y, maxW, boxH);
+                    ctx.fillStyle = '#FFFFFF';
+                    lines.forEach((line, i) => {
+                        ctx.fillText(line, x + 10, y + 20 + i * 20);
+                    });
+                }
+            }
+            animationFrameId = requestAnimationFrame(desenharLoop);
+        }
+
+        let animationFrameId = null;
 
         // Renderizar Lista de Empacotamentos com Ícones de Editar e Excluir
         function renderItemsList() {
@@ -822,6 +892,7 @@
             }
             activeItemId = id;
             renderItemsList();
+            salvarDados();
         }
 
         // Abrir Modal para Adicionar
@@ -868,6 +939,7 @@
                     activeItemId = items.length > 0 ? items[0].id : null;
                 }
                 renderItemsList();
+                salvarDados();
                 showToast('Item excluído com sucesso.');
             }
         };
@@ -886,6 +958,7 @@
                 items = [];
                 activeItemId = null;
                 renderItemsList();
+                salvarDados();
                 showToast('Lista de itens limpa com sucesso.');
             }
         };
@@ -933,6 +1006,7 @@
 
             modalOverlay.style.display = 'none';
             renderItemsList();
+            salvarDados();
         };
 
         // Gravação, Cronômetro e Download Automático em MP4
@@ -965,6 +1039,9 @@
                 }, 1000);
 
                 try {
+                    // Usa o stream do canvas para gravar também o timer e a descrição
+                    const canvasStream = recordCanvas.captureStream(30);
+                    
                     let options = { mimeType: 'video/webm;codecs=vp9,opus' };
                     if (!MediaRecorder.isTypeSupported(options.mimeType)) {
                         options = { mimeType: 'video/webm' };
@@ -973,7 +1050,7 @@
                         options = {};
                     }
 
-                    mediaRecorder = new MediaRecorder(mediaStream, options);
+                    mediaRecorder = new MediaRecorder(canvasStream, options);
                     
                     mediaRecorder.ondataavailable = (event) => {
                         if (event.data && event.data.size > 0) {
@@ -982,13 +1059,13 @@
                     };
 
                     mediaRecorder.onstop = () => {
-                        const blob = new Blob(recordedChunks, { type: 'video/mp4' });
+                        const blob = new Blob(recordedChunks, { type: 'video/webm' });
                         const url = URL.createObjectURL(blob);
                         const a = document.createElement('a');
                         a.style.display = 'none';
                         a.href = url;
                         
-                        const fileName = `${currentItem.nfe} - ${currentItem.pedido}.mp4`;
+                        const fileName = `${currentItem.nfe} - ${currentItem.pedido}.webm`;
                         a.download = fileName;
                         
                         document.body.appendChild(a);
@@ -1029,6 +1106,7 @@
                     currentItem.status = 'gravado';
                 }
                 renderItemsList();
+                salvarDados();
             }
         };
 
@@ -1052,10 +1130,10 @@
             }
         };
 
-        // Removido initCamera automático para evitar bloqueio do Chrome
-        // A câmera só é ativada quando o usuário clicar em "Ativar Câmera"
         window.addEventListener('DOMContentLoaded', () => {
+            carregarDados();
             renderItemsList();
+            initCamera();
         });
     </script>
 </body>
