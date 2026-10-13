@@ -591,7 +591,7 @@
                 </div>
 
                 <div class="video-placeholder" id="videoPlaceholder">VÍDEO</div>
-                <video id="mainVideo" autoplay playsinline muted></video>
+                <video id="mainVideo" playsinline muted></video>
             </div>
         </div>
 
@@ -709,19 +709,23 @@
 
                 mediaStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
                 mainVideo.srcObject = mediaStream;
-                mainVideo.play().catch(e => console.warn('Play automático do mainVideo bloqueado:', e));
+                
+                // Espera o navegador receber os dados do vídeo
+                while (mainVideo.videoWidth === 0) {
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+                
+                mainVideo.play().catch(e => console.warn('Play automático bloqueado:', e));
                 videoPlaceholder.style.display = 'none';
                 btnCamPermission.style.display = 'none';
 
                 // Clonar stream para o preview da sidebar
                 const sidebarVideo = document.createElement('video');
                 sidebarVideo.srcObject = mediaStream;
-                sidebarVideo.autoplay = true;
-                sidebarVideo.playsInline = true;
-                sidebarVideo.muted = true;
-                sidebarVideo.style.width = '100%';
-                sidebarVideo.style.height = '100%';
-                sidebarVideo.style.objectFit = 'cover';
+                // Espera o navegador receber os dados do vídeo
+                while (sidebarVideo.videoWidth === 0) {
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
                 sidebarVideo.play().catch(e => console.warn('Play sidebar bloqueado:', e));
                 sidebarCameraContainer.innerHTML = '';
                 sidebarCameraContainer.appendChild(sidebarVideo);
